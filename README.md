@@ -1,24 +1,27 @@
 # pi-tool-timeout
 
-Pi coding-agent extension: one policy for foreground execution.
+Pi coding-agent extension: one timeout overlay for foreground execution.
 
 > **No explicit budget -> 300s. Explicit budget -> honor it.**
-
-Applied to Pi's built-in `bash`, `grep`, and `find` tools.
 
 Compatible with `@earendil-works/pi-coding-agent` `0.85.x`.
 
 ## Design
 
-- `bash`: **not overridden**. Pi already exposes `timeout`; a `tool_call` hook fills `300` only when it is omitted. This keeps the active bash implementation, shell settings, renderers, and other bash extensions in control.
-- `grep` / `find`: thin same-name overrides only because Pi's native schemas have no timeout field. The overrides add `timeout?: number`, create a wall-clock deadline, then delegate execution and rendering to Pi's native implementations.
-- Explicit positive timeouts are preserved unchanged.
-- Parent cancellation propagates normally.
-- No retry policy, command classification, background execution, UI, configuration system, or arbitrary policy max.
+This package does not own tools. It overlays a single timeout policy onto whoever already owns them.
+
+Pi 0.85.x has no wrap-current-tool API, so the overlay uses two adapters:
+
+- **Native timeout** (`bash`, `powershell`): Pi already exposes `timeout`. A `tool_call` hook fills `300` only when it is omitted. The live implementation stays owner, so shell settings, renderers, spawn hooks, and other bash extensions keep working. The native schema still says there is no default; the model-visible correction is a per-tool guideline returned as `systemPrompt` from `before_agent_start` when that tool is selected.
+- **Signal wrap** (`grep`, `find`): native schemas have no timeout field. On `session_start`, the overlay adds `timeout?: number`, wraps `execute` with a wall-clock deadline, then delegates to Pi's public factories. Registration happens after the default active set exists, and the previous active set is restored, so installing this package does **not** enable grep/find.
+
+Explicit positive timeouts are preserved. Parent cancellation is not turned into a timeout.
+
+No retry policy, command classification, background execution, UI, or configuration system.
 
 The only technical upper bound is Node's timer limit (~24.8 days), matching Pi's native bash timer constraint.
 
-Native bash still documents `timeout` as optional with no default. This extension does not replace that schema. It injects a model-visible guideline by returning `systemPrompt` from `before_agent_start` (Pi 0.85.x only applies that return value; mutating `promptGuidelines` alone is not enough).
+Same-name extension tools are first-wins in Pi. This overlay wraps builtins when no earlier extension registered the same name. It cannot compose on top of an earlier same-name override.
 
 ## Install
 
@@ -61,9 +64,7 @@ npm test
 npm run test:e2e
 ```
 
-Requires Node `>=22.19.0`. `npm test` covers the timeout policy helpers. `npm run test:e2e` loads the extension through a local Pi 0.85.x install and exercises bash/grep/find timeouts against the native tools.
-
-Installing this package registers same-name grep/find overrides, so Pi will enable those tools even if they were previously inactive. Bash is not overridden; its schema still says there is no default timeout, while the runtime `tool_call` hook and the injected guideline apply 300s.
+Requires Node `>=22.19.0`. `npm test` covers the overlay helpers. `npm run test:e2e` loads the extension through a local Pi 0.85.x install and exercises bash/grep/find timeouts against the native tools.
 
 ## License
 

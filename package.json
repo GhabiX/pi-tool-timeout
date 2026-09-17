@@ -1,11 +1,11 @@
 {
   "name": "pi-tool-timeout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
   "author": "GhabiX",
-  "description": "A minimal Pi extension that gives foreground bash, grep, and find calls a default execution budget while preserving explicit per-call timeouts.",
+  "description": "A timeout overlay for Pi foreground tools: omitted budget becomes 300s, explicit budgets are honored.",
   "keywords": [
     "pi-package"
   ],

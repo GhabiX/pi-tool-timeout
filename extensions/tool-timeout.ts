@@ -6,72 +6,70 @@ import {
 import { Type } from "typebox";
 import {
   DEFAULT_TIMEOUT_SECONDS,
-  GUIDELINE,
   MAX_TIMER_SECONDS,
-  applyTimeoutGuideline,
-  executeWithDeadline,
-  validateTimeout,
+  TIMEOUT_PARAMETER_DESCRIPTION,
+  WRAPPED_TIMEOUT_TOOLS,
+  applyNativeTimeoutGuidelines,
+  isNativeTimeoutTool,
+  withTimeoutOverlay,
 } from "./timeout-policy.ts";
+
+const WRAP_FACTORIES = {
+  grep: createGrepToolDefinition,
+  find: createFindToolDefinition,
+} as const;
 
 function timeoutParameter() {
   return Type.Optional(
     Type.Number({
-      description: `Wall-clock timeout in seconds (default: ${DEFAULT_TIMEOUT_SECONDS}; explicit values are honored)`,
+      description: TIMEOUT_PARAMETER_DESCRIPTION,
       exclusiveMinimum: 0,
       maximum: MAX_TIMER_SECONDS,
     }),
   );
 }
 
+function overlayBuiltIn<T extends { parameters: { properties?: Record<string, unknown> } }>(definition: T) {
+  return withTimeoutOverlay(
+    definition,
+    Type.Object({
+      ...(definition.parameters.properties ?? {}),
+      timeout: timeoutParameter(),
+    }),
+  );
+}
+
+function installOverlays(pi: ExtensionAPI, cwd: string) {
+  const known = new Set(pi.getAllTools().map((tool) => tool.name));
+  const active = pi.getActiveTools();
+  for (const name of WRAPPED_TIMEOUT_TOOLS) {
+    if (!known.has(name)) continue;
+    pi.registerTool(overlayBuiltIn(WRAP_FACTORIES[name](cwd)));
+  }
+  pi.setActiveTools(active);
+}
+
 export default function toolTimeout(pi: ExtensionAPI) {
-  // Bash already exposes timeout. Patch only the missing default so the active
-  // bash implementation (including shell settings / other extensions) stays owner.
+  // Native-timeout tools already own execution (shell settings, spawn hooks,
+  // other bash extensions). Only fill the omitted default.
   pi.on("tool_call", (event) => {
-    if (event.toolName === "bash" && event.input.timeout === undefined) {
+    if (isNativeTimeoutTool(event.toolName) && event.input.timeout === undefined) {
       event.input.timeout = DEFAULT_TIMEOUT_SECONDS;
     }
   });
 
-  const baseCwd = process.cwd();
-  const grep = createGrepToolDefinition(baseCwd);
-  const find = createFindToolDefinition(baseCwd);
-  const grepParameters = Type.Object({ ...grep.parameters.properties, timeout: timeoutParameter() });
-  const findParameters = Type.Object({ ...find.parameters.properties, timeout: timeoutParameter() });
-
-  // grep/find need overrides only because their native schemas expose no timeout.
-  // Everything else, including rendering and search semantics, is delegated.
-  pi.registerTool({
-    ...grep,
-    description: `${grep.description} Searches default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout; set timeout explicitly for intentionally long scans.`,
-    parameters: grepParameters,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const { timeout: requestedTimeout, ...grepParams } = params;
-      const timeout = validateTimeout(requestedTimeout ?? DEFAULT_TIMEOUT_SECONDS);
-      return executeWithDeadline("grep", timeout, signal, (deadlineSignal) =>
-        createGrepToolDefinition(ctx.cwd).execute(toolCallId, grepParams, deadlineSignal, onUpdate, ctx),
-      );
-    },
+  // Register same-name overlays after the default active set exists so this
+  // package never enables grep/find. Overlay never changes enablement.
+  pi.on("session_start", (_event, ctx) => {
+    installOverlays(pi, ctx.cwd);
   });
 
-  pi.registerTool({
-    ...find,
-    description: `${find.description} Searches default to a ${DEFAULT_TIMEOUT_SECONDS}s timeout; set timeout explicitly for intentionally long scans.`,
-    parameters: findParameters,
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const { timeout: requestedTimeout, ...findParams } = params;
-      const timeout = validateTimeout(requestedTimeout ?? DEFAULT_TIMEOUT_SECONDS);
-      return executeWithDeadline("find", timeout, signal, (deadlineSignal) =>
-        createFindToolDefinition(ctx.cwd).execute(toolCallId, findParams, deadlineSignal, onUpdate, ctx),
-      );
-    },
-  });
-
-  // Pi only applies before_agent_start results that return `systemPrompt`.
-  // Mutating promptGuidelines alone does not rebuild the model-visible prompt.
+  // bash/powershell keep their live schema, so the model-visible default has to
+  // be returned as systemPrompt. grep/find guidelines live on the overlayed
+  // tool definitions and are included by Pi only when those tools are active.
   pi.on("before_agent_start", (event) => {
-    const guidelines = (event.systemPromptOptions.promptGuidelines ??= []);
-    if (!guidelines.includes(GUIDELINE)) guidelines.push(GUIDELINE);
-    const systemPrompt = applyTimeoutGuideline(event.systemPrompt);
+    const selectedTools = event.systemPromptOptions.selectedTools ?? [];
+    const systemPrompt = applyNativeTimeoutGuidelines(event.systemPrompt, selectedTools);
     if (systemPrompt === event.systemPrompt) return;
     return { systemPrompt };
   });
@@ -79,8 +77,7 @@ export default function toolTimeout(pi: ExtensionAPI) {
 
 export {
   DEFAULT_TIMEOUT_SECONDS,
-  GUIDELINE,
-  applyTimeoutGuideline,
-  executeWithDeadline,
-  validateTimeout,
+  applyNativeTimeoutGuidelines,
+  isNativeTimeoutTool,
+  withTimeoutOverlay,
 };

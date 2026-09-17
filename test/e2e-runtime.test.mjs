@@ -45,7 +45,7 @@ async function loadPlugin() {
   );
 }
 
-async function createIsolatedSession() {
+async function createIsolatedSession(tools) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-timeout-e2e-"));
   const agentDir = join(cwd, "agent");
   await mkdir(agentDir, { recursive: true });
@@ -61,30 +61,25 @@ async function createIsolatedSession() {
     resourceLoader,
     sessionManager: pi.SessionManager.inMemory(),
     modelRuntime: await pi.ModelRuntime.create(),
-    tools: ["bash", "grep", "find"],
+    ...(tools ? { tools } : {}),
   });
+  await session.bindExtensions({});
   return { cwd, session, extensions: resourceLoader.getExtensions() };
 }
 
-test("Pi jiti loader registers grep/find timeout overrides without replacing bash", async () => {
+test("factory load does not register tools; overlay waits for session_start", async () => {
   const loaded = await loadPlugin();
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
 
   const ext = loaded.extensions[0];
-  assert.deepEqual([...ext.tools.keys()].sort(), ["find", "grep"]);
+  assert.deepEqual([...ext.tools.keys()], []);
+  assert.equal(ext.handlers.has("session_start"), true);
   assert.equal(ext.handlers.has("tool_call"), true);
   assert.equal(ext.handlers.has("before_agent_start"), true);
-
-  const grep = ext.tools.get("grep").definition;
-  const find = ext.tools.get("find").definition;
-  assert.equal(schemaProperties(grep.parameters).timeout.type, "number");
-  assert.equal(schemaProperties(find.parameters).timeout.type, "number");
-  assert.match(grep.description, /300s timeout/);
-  assert.match(find.description, /300s timeout/);
 });
 
-test("tool_call fills bash default 300 and preserves explicit values", async () => {
+test("tool_call fills bash/powershell default 300 and preserves explicit values", async () => {
   const loaded = await loadPlugin();
   const handler = loaded.extensions[0].handlers.get("tool_call")[0];
 
@@ -96,29 +91,74 @@ test("tool_call fills bash default 300 and preserves explicit values", async () 
   await handler({ toolName: "bash", input: explicit });
   assert.equal(explicit.timeout, 12);
 
+  const pwsh = { command: "true" };
+  await handler({ toolName: "powershell", input: pwsh });
+  assert.equal(pwsh.timeout, 300);
+
   const grepInput = { pattern: "x" };
   await handler({ toolName: "grep", input: grepInput });
   assert.equal(grepInput.timeout, undefined);
 });
 
-test("before_agent_start returns systemPrompt because Pi 0.85.x ignores promptGuidelines mutation", async () => {
+test("before_agent_start only injects native-tool guidelines for selected tools", async () => {
   const loaded = await loadPlugin();
   const handler = loaded.extensions[0].handlers.get("before_agent_start")[0];
-  const event = { systemPrompt: "base prompt", systemPromptOptions: {} };
-  const result = await handler(event);
+  const bash = policy.toolTimeoutGuideline("bash");
 
-  assert.equal(result.systemPrompt, `base prompt\n\n${policy.GUIDELINE}`);
-  assert.deepEqual(event.systemPromptOptions.promptGuidelines, [policy.GUIDELINE]);
+  const grepOnly = await handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["grep", "find"] },
+  });
+  assert.equal(grepOnly, undefined);
+
+  const result = await handler({
+    systemPrompt: "base prompt",
+    systemPromptOptions: { selectedTools: ["bash"] },
+  });
+  assert.equal(result.systemPrompt, `base prompt\n\n${bash}`);
 
   const second = await handler({
     systemPrompt: result.systemPrompt,
-    systemPromptOptions: event.systemPromptOptions,
+    systemPromptOptions: { selectedTools: ["bash"] },
   });
   assert.equal(second, undefined);
 });
 
-test("isolated Pi session loads the package and executes bash/grep/find timeouts", async () => {
-  const { cwd, session, extensions } = await createIsolatedSession();
+test("overlay does not enable grep/find on the default tool set", async () => {
+  const { cwd, session } = await createIsolatedSession();
+  try {
+    const active = session.getActiveToolNames();
+    assert.deepEqual(active.includes("bash"), true);
+    assert.equal(active.includes("grep"), false);
+    assert.equal(active.includes("find"), false);
+
+    const grepDef = session.getToolDefinition("grep");
+    const findDef = session.getToolDefinition("find");
+    const bashDef = session.getToolDefinition("bash");
+    assert.equal(schemaProperties(grepDef.parameters).timeout.type, "number");
+    assert.equal(schemaProperties(findDef.parameters).timeout.type, "number");
+    assert.match(JSON.stringify(schemaProperties(bashDef.parameters).timeout), /no default timeout/);
+    assert.equal(/grep calls default to 300s/.test(session.systemPrompt ?? ""), false);
+    assert.equal(/find calls default to 300s/.test(session.systemPrompt ?? ""), false);
+
+    const injected = await session._extensionRunner.emitBeforeAgentStart(
+      "probe",
+      undefined,
+      session.systemPrompt ?? "base",
+      { cwd, selectedTools: active, promptGuidelines: [] },
+    );
+    assert.match(injected.systemPrompt, /bash calls default to 300s/);
+    assert.equal(/grep calls default to 300s/.test(injected.systemPrompt), false);
+
+    session.setActiveToolsByName([...active, "grep"]);
+    assert.match(session.systemPrompt ?? "", /grep calls default to 300s/);
+  } finally {
+    session.dispose?.();
+  }
+});
+
+test("isolated Pi session overlays grep/find and executes bash/grep/find timeouts", async () => {
+  const { cwd, session, extensions } = await createIsolatedSession(["bash", "grep", "find"]);
   try {
     assert.deepEqual(extensions.errors, []);
     assert.equal(
@@ -147,14 +187,17 @@ test("isolated Pi session loads the package and executes bash/grep/find timeouts
       "limit",
       "timeout",
     ]);
+    assert.match(session.systemPrompt ?? "", /grep calls default to 300s/);
+    assert.match(session.systemPrompt ?? "", /find calls default to 300s/);
+    assert.equal(/bash calls default to 300s/.test(session.systemPrompt ?? ""), false);
 
     const injected = await session._extensionRunner.emitBeforeAgentStart(
       "probe",
       undefined,
       session.systemPrompt ?? "base",
-      { cwd, promptGuidelines: [] },
+      { cwd, promptGuidelines: [], selectedTools: ["bash", "grep", "find"] },
     );
-    assert.equal(injected.systemPrompt.includes(policy.GUIDELINE), true);
+    assert.equal(injected.systemPrompt.includes(policy.toolTimeoutGuideline("bash")), true);
 
     const bashTool = session._toolRegistry.get("bash");
     const grepTool = session._toolRegistry.get("grep");
