@@ -34,7 +34,7 @@ Project-local:
 pi install -l /absolute/path/to/pi-tool-timeout
 ```
 
-Git (once `github.com/GhabiX/pi-tool-timeout` is published):
+Git:
 
 ```bash
 pi install git:github.com/GhabiX/pi-tool-timeout
