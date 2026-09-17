@@ -1,0 +1,40 @@
+{
+  "name": "pi-tool-timeout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "GhabiX",
+  "description": "A minimal Pi extension that gives foreground bash, grep, and find calls a default execution budget while preserving explicit per-call timeouts.",
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GhabiX/pi-tool-timeout.git"
+  },
+  "bugs": {
+    "url": "https://github.com/GhabiX/pi-tool-timeout/issues"
+  },
+  "homepage": "https://github.com/GhabiX/pi-tool-timeout#readme",
+  "pi": {
+    "extensions": [
+      "./extensions/tool-timeout.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/timeout-policy.test.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0",
+    "typebox": "^1.3.7"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
