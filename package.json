@@ -23,7 +23,8 @@
     ]
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/timeout-policy.test.mjs"
+    "test": "node --experimental-strip-types --test test/timeout-policy.test.mjs",
+    "test:e2e": "node --experimental-strip-types --test test/e2e-runtime.test.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0",

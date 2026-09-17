@@ -58,9 +58,12 @@ Use a separate background-terminal tool for servers, watchers, and genuinely lon
 
 ```bash
 npm test
+npm run test:e2e
 ```
 
-Requires Node `>=22.19.0`. Tests cover the timeout policy helpers only; grep/find still delegate to Pi at runtime.
+Requires Node `>=22.19.0`. `npm test` covers the timeout policy helpers. `npm run test:e2e` loads the extension through a local Pi 0.85.x install and exercises bash/grep/find timeouts against the native tools.
+
+Installing this package registers same-name grep/find overrides, so Pi will enable those tools even if they were previously inactive. Bash is not overridden; its schema still says there is no default timeout, while the runtime `tool_call` hook and the injected guideline apply 300s.
 
 ## License
 
